@@ -25,7 +25,7 @@ const PORT = process.env.PORT || 3000;
 
 // Middleware Configuration
 app.use(cors({
-  origin: 'https://ai-startup-studio-7l38xpw4x-jamrin2409-gmailcoms-projects.vercel.app',
+  origin: 'https://ai-startup-studio-7l38xpw4x-jamrin2409-gmailcoms-projects.vercel.app' || 'http://localhost:5173',
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));

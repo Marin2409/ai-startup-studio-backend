@@ -14,6 +14,11 @@ router.post('/register', registerUser);
 // http://localhost:3000/api/user/login
 router.post('/login', loginUser);
 
+// Complete onboarding
+// Route POST: /api/user/complete-onboarding
+// http://localhost:3000/api/user/complete-onboarding
+// router.post('/complete-onboarding', completeOnboarding);
+
 // GET /api/users - Get all users (for development/testing)
 // http://localhost:3000/api/user/users
 // router.get('/get-all-users', getUsers);

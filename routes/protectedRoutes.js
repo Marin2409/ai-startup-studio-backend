@@ -15,7 +15,7 @@ protectedRouter.use(authenticateToken);
 // =============================================
 
 // GET /api/profile - Get current user's profile
-// http://localhost:4000/api/profile
+// http://localhost:3000/api/profile
 protectedRouter.get('/profile', async (req, res) => {
     try {
         const user = await sql`SELECT id, first_name, last_name, email, created_at FROM users WHERE id = ${req.user.userId}`;

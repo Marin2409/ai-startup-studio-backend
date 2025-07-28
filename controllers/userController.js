@@ -220,6 +220,16 @@ const loginUser = async (req, res) => {
     }
 };
 
+// Complete onboarding
+// Route POST: /api/user/complete-onboarding
+// const completeOnboarding = async (req, res) => {
+//     try {
+        
+//     } catch (error) {
+        
+//     }
+// };
+
 // =============================================
 // GET ALL USERS - For testing/admin purposes
 // =============================================

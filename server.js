@@ -5,8 +5,8 @@
  * 2. Sets up Express app and middleware
  * 3. Connects to database using configs/db.js
  * 4. Starts the server on specified port
- * 5. Imports and uses route files (To-Do: Import and use route files)
- * 6. Imports and uses JSON Web Token (JWT) files (To-Do: Import and use JWT files)
+ * 5. Imports and uses route files
+ * 6. Imports and uses JSON Web Token (JWT) files 
  *------------------------------------------------------------------
  */
 
@@ -21,11 +21,12 @@ import protectedRoutes from './routes/protectedRoutes.js';
 
 // Constants
 const app = express(); 
-const PORT = process.env.PORT || 3000; 
+const PORT = process.env.PORT || 3000;
+const allowedOrigins = ['http://localhost:5173'];
 
 // Middleware Configuration
 app.use(cors({
-  origin: 'https://ai-startup-studio-7l38xpw4x-jamrin2409-gmailcoms-projects.vercel.app' || 'http://localhost:5173',
+  origin: allowedOrigins,
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
@@ -98,10 +99,10 @@ app.get('/health', async (req, res) => {
 // JSON Web Token (JWT) routes 
 console.log('JWT_SECRET:', process.env.JWT_SECRET);
 
-// Mount user routes (To-Do: Import and use route files)
+// Mount user routes
 app.use('/api/user', userRoutes);
 
-// Mount protected routes (To-Do: Import and use route files)
+// Mount protected routes
 app.use('/api', protectedRoutes);
 
 // Initialize server

@@ -27,7 +27,7 @@ const allowedOrigins = ['http://localhost:5173'];
 // Middleware Configuration
 app.use(cors({
   origin: allowedOrigins,
-  methods: ['GET', 'POST', 'OPTIONS'],
+  methods: ['GET', 'POST', 'OPTIONS', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 app.use(express.json()); 

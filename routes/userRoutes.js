@@ -1,7 +1,7 @@
 import express from 'express';
 import { registerUser, loginUser, updateUserProfile, deleteCurrentUser } from '../controllers/userController.js';
-import { createProject, getUserProjects, getProjectById, updateProject, deleteProject } from '../controllers/projectController.js';
-import { pricingOnboarding, getUserWithBilling } from '../controllers/billingController.js';
+import { createProject, getUserProjects, getProjectById, updateProject, deleteProject, purchaseProjectDocuments } from '../controllers/projectController.js';
+import { pricingOnboarding, getUserWithBilling, updateUserPlan, cancelSubscription, purchaseAddonPackage, purchaseImagePack } from '../controllers/billingController.js';
 import { authenticateToken } from '../middlewares/auth.js';
 
 // Create a router
@@ -31,6 +31,21 @@ router.post('/pricing-onboarding', authenticateToken, pricingOnboarding);
 // http://localhost:3000/api/user/create-project
 router.post('/create-project', authenticateToken, createProject);
 
+// Purchase add-on package
+// Route POST: /api/user/purchase-addon
+// http://localhost:3000/api/user/purchase-addon
+router.post('/purchase-addon', authenticateToken, purchaseAddonPackage);
+
+// Purchase image pack (account-wide)
+// Route POST: /api/user/purchase-images
+// http://localhost:3000/api/user/purchase-images
+router.post('/purchase-images', authenticateToken, purchaseImagePack);
+
+// Purchase documents for specific project
+// Route POST: /api/projects/:projectId/purchase-documents
+// http://localhost:3000/api/projects/:projectId/purchase-documents
+router.post('/projects/:projectId/purchase-documents', authenticateToken, purchaseProjectDocuments);
+
 // =============================================
 // GET REQUESTS
 // =============================================
@@ -58,6 +73,16 @@ router.get('/profile', authenticateToken, getUserWithBilling);
 // Route PUT: /api/user/profile
 // http://localhost:3000/api/user/profile
 router.put('/profile', authenticateToken, updateUserProfile);
+
+// Update user plan
+// Route PUT: /api/user/plan
+// http://localhost:3000/api/user/plan
+router.put('/plan', authenticateToken, updateUserPlan);
+
+// Cancel subscription (downgrade to free)
+// Route PUT: /api/user/cancel-subscription
+// http://localhost:3000/api/user/cancel-subscription
+router.put('/cancel-subscription', authenticateToken, cancelSubscription);
 
 // Update project settings
 // Route PUT: /api/user/projects/:projectId

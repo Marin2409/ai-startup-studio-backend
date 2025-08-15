@@ -20,7 +20,8 @@ const createProject = async (req, res) => {
             technical_level, 
             need_cofounder, 
             preferred_tech_stack, 
-            project_description 
+            project_description,
+            ai_prompt
         } = req.body;
 
         console.log('Creating project for user:', userId);
@@ -101,33 +102,50 @@ const createProject = async (req, res) => {
             });
         }
 
-        // Check if user exists
-        const existingUser = await sql`
-            SELECT id FROM users WHERE id = ${userId}
+        // Check if user exists and get their current plan
+        const userResult = await sql`
+            SELECT 
+                u.id,
+                b.selected_plan
+            FROM users u
+            LEFT JOIN billing b ON u.id = b.user_id
+            WHERE u.id = ${userId}
         `;
 
-        if (existingUser.length === 0) {
+        if (userResult.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: 'User not found'
             });
         }
 
+        const user = userResult[0];
+        
+        // Determine base documents based on user's plan
+        const planDocuments = {
+            'free': 6,
+            'builder': 16,
+            'enterprise': 32
+        };
+        
+        const userPlan = user.selected_plan || 'free';
+        const baseDocuments = planDocuments[userPlan] || 6;
+
         // Create the project
         const result = await sql`
             INSERT INTO projects (
                 user_id, project_name, industry, team_size, primary_objective,
                 timeline, budget_range, technical_level, need_cofounder,
-                preferred_tech_stack, project_description, status, onboarding_completed
+                preferred_tech_stack, project_description, ai_prompt, status, onboarding_completed, base_documents
             ) VALUES (
                 ${userId}, ${project_name.trim()}, ${industry}, ${team_size}, ${primary_objective},
                 ${timeline}, ${budget_range}, ${technical_level}, ${need_cofounder || false},
                 ${preferred_tech_stack}, ${project_description ? project_description.trim() : null}, 
-                'active', true
+                ${ai_prompt ? ai_prompt.trim() : null}, 'active', true, ${baseDocuments}
             )
             RETURNING id, project_name, industry, team_size, primary_objective, timeline, 
                      budget_range, technical_level, need_cofounder, preferred_tech_stack, 
-                     project_description, status, created_at
+                     project_description, ai_prompt, status, created_at
         `;
 
         const newProject = result[0];
@@ -150,6 +168,7 @@ const createProject = async (req, res) => {
                 needCofounder: newProject.need_cofounder,
                 techStack: newProject.preferred_tech_stack,
                 description: newProject.project_description,
+                aiPrompt: newProject.ai_prompt,
                 status: newProject.status,
                 createdAt: newProject.created_at
             }
@@ -214,7 +233,7 @@ const getUserProjects = async (req, res) => {
             SELECT 
                 id, project_name, industry, team_size, primary_objective,
                 timeline, budget_range, technical_level, need_cofounder,
-                preferred_tech_stack, status, project_description,
+                preferred_tech_stack, status, project_description, ai_prompt,
                 created_at, updated_at
             FROM projects 
             WHERE user_id = ${userId}
@@ -240,6 +259,7 @@ const getUserProjects = async (req, res) => {
             technicalLevel: project.technical_level,
             needCofounder: project.need_cofounder,
             techStack: project.preferred_tech_stack,
+            aiPrompt: project.ai_prompt,
             createdAt: project.created_at
         }));
 
@@ -285,15 +305,18 @@ const getProjectById = async (req, res) => {
             });
         }
 
-        // Get specific project from database
+        // Get specific project from database with document info and user's subscription
         const projects = await sql`
             SELECT 
-                id, project_name, industry, team_size, primary_objective,
-                timeline, budget_range, technical_level, need_cofounder,
-                preferred_tech_stack, status, project_description,
-                created_at, updated_at
-            FROM projects 
-            WHERE id = ${projectId} AND user_id = ${userId}
+                p.id, p.project_name, p.industry, p.team_size, p.primary_objective,
+                p.timeline, p.budget_range, p.technical_level, p.need_cofounder,
+                p.preferred_tech_stack, p.status, p.project_description, p.ai_prompt,
+                p.created_at, p.updated_at, p.base_documents, p.purchased_documents, 
+                p.total_documents, p.document_purchases,
+                b.selected_plan as subscription
+            FROM projects p
+            LEFT JOIN billing b ON p.user_id = b.user_id
+            WHERE p.id = ${projectId} AND p.user_id = ${userId}
         `;
 
         if (projects.length === 0) {
@@ -312,8 +335,6 @@ const getProjectById = async (req, res) => {
             name: project.project_name,
             type: project.industry.charAt(0).toUpperCase() + project.industry.slice(1),
             description: project.project_description || `${project.primary_objective} project with ${project.team_size} team size`,
-            region: 'Local Development', // You can customize this based on your needs
-            status: project.status,
             lastUpdated: getTimeAgo(project.updated_at),
             // Additional project details
             industry: project.industry,
@@ -324,11 +345,16 @@ const getProjectById = async (req, res) => {
             technicalLevel: project.technical_level,
             needCofounder: project.need_cofounder,
             techStack: project.preferred_tech_stack,
+            aiPrompt: project.ai_prompt,
             createdAt: project.created_at,
             updatedAt: project.updated_at,
-            // Mock data for UI display (will be replaced with real data later)
-            progress: 65, // This could be calculated based on project milestones
-            fundingAmount: '$0' // This could come from a funding table later
+            // Document tracking
+            baseDocuments: project.base_documents,
+            purchasedDocuments: project.purchased_documents,
+            totalDocuments: project.total_documents,
+            usedDocuments: 0, // TODO: Implement when documents are actually generated
+            documentPurchases: project.document_purchases || [],
+            subscription: project.subscription || 'free'
         };
 
         res.status(200).json({
@@ -464,6 +490,146 @@ const updateProject = async (req, res) => {
     }
 };
 
+// Purchase Documents for Project
+// Route POST: /api/projects/:projectId/purchase-documents
+// http://localhost:3000/api/projects/:projectId/purchase-documents
+const purchaseProjectDocuments = async (req, res) => {
+    try {
+        const { userId } = req.user; // From auth middleware
+        const { projectId } = req.params;
+        const { quantity = 5 } = req.body;
+        
+        console.log('Purchase documents request:', { userId, projectId, quantity });
+
+        // Input validation
+        if (!projectId) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Project ID is required' 
+            });
+        }
+
+        if (!quantity || quantity <= 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'Valid quantity is required'
+            });
+        }
+
+        // Validate quantity (5 documents per pack)
+        if (quantity !== 5) {
+            return res.status(400).json({
+                success: false,
+                message: 'Document packs contain 5 documents each'
+            });
+        }
+
+        // Check if project exists and belongs to user
+        const projectResult = await sql`
+            SELECT 
+                p.id, p.project_name, p.purchased_documents, p.document_purchases,
+                b.selected_plan
+            FROM projects p
+            LEFT JOIN billing b ON p.user_id = b.user_id
+            WHERE p.id = ${projectId} AND p.user_id = ${userId}
+        `;
+
+        if (projectResult.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Project not found or you do not have access to this project'
+            });
+        }
+
+        const project = projectResult[0];
+
+        // Check if user is on Enterprise plan (unlimited documents)
+        if (project.selected_plan === 'enterprise') {
+            return res.status(400).json({
+                success: false,
+                message: 'Enterprise plan includes unlimited documents'
+            });
+        }
+
+        // Calculate new values
+        const currentPurchased = project.purchased_documents || 0;
+        const newPurchased = currentPurchased + quantity;
+
+        // Create purchase record
+        const purchaseRecord = {
+            id: `doc_${Date.now()}`,
+            quantity: quantity,
+            price: 8.00,
+            purchase_date: new Date().toISOString(),
+            package_type: 'document_pack'
+        };
+
+        // Parse existing purchase history and add new record
+        const currentHistory = project.document_purchases || [];
+        const updatedHistory = [...currentHistory, purchaseRecord];
+
+        // Update project record
+        const updateResult = await sql`
+            UPDATE projects 
+            SET 
+                purchased_documents = ${newPurchased},
+                document_purchases = ${JSON.stringify(updatedHistory)}::jsonb,
+                last_document_purchase = NOW(),
+                updated_at = NOW()
+            WHERE id = ${projectId} AND user_id = ${userId}
+            RETURNING id, project_name, purchased_documents, total_documents, updated_at
+        `;
+
+        if (updateResult.length === 0) {
+            return res.status(500).json({
+                success: false,
+                message: 'Failed to update project'
+            });
+        }
+
+        const updatedProject = updateResult[0];
+
+        // Return success response
+        res.status(200).json({
+            success: true,
+            message: `Successfully purchased ${quantity} additional documents for "${updatedProject.project_name}"`,
+            purchase: {
+                quantity: quantity,
+                price: 8.00,
+                new_purchased_documents: updatedProject.purchased_documents,
+                new_total_documents: updatedProject.total_documents,
+                purchase_id: purchaseRecord.id,
+                project_name: updatedProject.project_name
+            }
+        });
+
+    } catch (error) {
+        console.error('Purchase project documents error:', error);
+
+        // Handle specific database errors
+        if (error.code === '23514') { 
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Invalid purchase data format' 
+            });
+        }
+
+        // Handle database connection errors
+        if (error.message?.includes('connect') || error.message?.includes('timeout')) {
+            return res.status(503).json({ 
+                success: false, 
+                message: 'Database connection error. Please try again.' 
+            });
+        }
+
+        // Handle other errors
+        res.status(500).json({ 
+            success: false, 
+            message: 'Internal server error' 
+        });
+    }
+};
+
 // =============================================
 // DELETE REQUESTS
 // =============================================
@@ -575,4 +741,4 @@ const getTimeAgo = (date) => {
 // =============================================
 // EXPORT FUNCTIONS
 // =============================================
-export { createProject, getUserProjects, getProjectById, updateProject, deleteProject, getTimeAgo };
+export { createProject, getUserProjects, getProjectById, updateProject, deleteProject, purchaseProjectDocuments, getTimeAgo };

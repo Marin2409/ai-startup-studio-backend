@@ -209,7 +209,8 @@ const getUserWithBilling = async (req, res) => {
                 b.id as billing_id, b.selected_plan, b.billing_cycle, b.plan_price, 
                 b.add_ons, b.status as billing_status, b.payment_status,
                 b.subscription_start_date, b.subscription_end_date, b.next_billing_date,
-                b.image_credits, b.total_image_purchases, b.image_purchase_history
+                b.image_credits, b.total_image_purchases, b.image_purchase_history,
+                b.document_credits, b.total_document_purchases, b.document_purchase_history
             FROM users u
             LEFT JOIN billing b ON u.id = b.user_id
             WHERE u.id = ${userId}
@@ -251,7 +252,10 @@ const getUserWithBilling = async (req, res) => {
                     next_billing_date: user.next_billing_date,
                     image_credits: user.image_credits || 0,
                     total_image_purchases: user.total_image_purchases || 0,
-                    image_purchase_history: user.image_purchase_history || []
+                    image_purchase_history: user.image_purchase_history || [],
+                    document_credits: user.document_credits || 0,
+                    total_document_purchases: user.total_document_purchases || 0,
+                    document_purchase_history: user.document_purchase_history || []
                 } : null
             }
         };
@@ -860,6 +864,146 @@ const purchaseImagePack = async (req, res) => {
     }
 };
 
+// Purchase Document Credits (Account-wide)
+// Route POST: /api/user/purchase-documents
+// http://localhost:3000/api/user/purchase-documents
+const purchaseDocumentPack = async (req, res) => {
+    try {
+        const { userId } = req.user; // From auth middleware
+        const { quantity = 5 } = req.body;
+        
+        console.log('Purchase document pack request:', { userId, quantity });
+
+        // Input validation
+        if (!quantity || quantity <= 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'Valid quantity is required'
+            });
+        }
+
+        // Validate quantity (5 documents per pack)
+        if (quantity !== 5) {
+            return res.status(400).json({
+                success: false,
+                message: 'Document packs contain 5 documents each'
+            });
+        }
+
+        // Check if user exists and get current billing info
+        const userResult = await sql`
+            SELECT 
+                u.id, u.first_name, u.last_name, u.email,
+                b.id as billing_id, b.selected_plan, b.document_credits, b.total_document_purchases, b.document_purchase_history
+            FROM users u
+            LEFT JOIN billing b ON u.id = b.user_id
+            WHERE u.id = ${userId}
+        `;
+
+        if (userResult.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
+
+        const user = userResult[0];
+        
+        if (!user.billing_id) {
+            return res.status(400).json({
+                success: false,
+                message: 'No billing record found. Please complete onboarding first.'
+            });
+        }
+
+        // Check if user is on Enterprise plan (unlimited documents)
+        if (user.selected_plan === 'enterprise') {
+            return res.status(400).json({
+                success: false,
+                message: 'Enterprise plan includes unlimited documents'
+            });
+        }
+
+        // Calculate new values
+        const currentCredits = user.document_credits || 0;
+        const newCredits = currentCredits + quantity;
+        const newTotalPurchases = (user.total_document_purchases || 0) + 1;
+
+        // Create purchase record
+        const purchaseRecord = {
+            id: `doc_${Date.now()}`,
+            quantity: quantity,
+            price: 8.00,
+            purchase_date: new Date().toISOString(),
+            package_type: 'document_pack'
+        };
+
+        // Parse existing purchase history and add new record
+        const currentHistory = user.document_purchase_history || [];
+        const updatedHistory = [...currentHistory, purchaseRecord];
+
+        // Update billing record
+        const updateResult = await sql`
+            UPDATE billing 
+            SET 
+                document_credits = ${newCredits},
+                total_document_purchases = ${newTotalPurchases},
+                document_purchase_history = ${JSON.stringify(updatedHistory)}::jsonb,
+                last_document_purchase = NOW(),
+                updated_at = NOW()
+            WHERE user_id = ${userId}
+            RETURNING id, document_credits, total_document_purchases, updated_at
+        `;
+
+        if (updateResult.length === 0) {
+            return res.status(500).json({
+                success: false,
+                message: 'Failed to update billing record'
+            });
+        }
+
+        const updatedBilling = updateResult[0];
+
+        // Return success response
+        res.status(200).json({
+            success: true,
+            message: `Successfully purchased ${quantity} document credits`,
+            purchase: {
+                quantity: quantity,
+                price: 8.00,
+                new_credits: updatedBilling.document_credits,
+                total_purchases: updatedBilling.total_document_purchases,
+                purchase_id: purchaseRecord.id
+            }
+        });
+
+    } catch (error) {
+        console.error('Purchase document pack error:', error);
+
+        // Handle specific database errors
+        if (error.code === '23514') { 
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Invalid purchase data format' 
+            });
+        }
+
+        // Handle database connection errors
+        if (error.message?.includes('connect') || error.message?.includes('timeout')) {
+            return res.status(503).json({ 
+                success: false, 
+                message: 'Database connection error. Please try again.' 
+            });
+        }
+
+        // Handle other errors
+        res.status(500).json({ 
+            success: false, 
+            message: 'Internal server error' 
+        });
+    }
+};
+
 // =============================================
 // DELETE REQUESTS
 // =============================================
@@ -868,4 +1012,4 @@ const purchaseImagePack = async (req, res) => {
 // =============================================
 // EXPORT FUNCTIONS
 // =============================================
-export { pricingOnboarding, getUserWithBilling, updateUserPlan, cancelSubscription, purchaseAddonPackage, purchaseImagePack };
+export { pricingOnboarding, getUserWithBilling, updateUserPlan, cancelSubscription, purchaseAddonPackage, purchaseImagePack, purchaseDocumentPack };

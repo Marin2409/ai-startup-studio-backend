@@ -311,9 +311,8 @@ const getProjectById = async (req, res) => {
                 p.id, p.project_name, p.industry, p.team_size, p.primary_objective,
                 p.timeline, p.budget_range, p.technical_level, p.need_cofounder,
                 p.preferred_tech_stack, p.status, p.project_description, p.ai_prompt,
-                p.created_at, p.updated_at, p.base_documents, p.purchased_documents, 
-                p.total_documents, p.document_purchases,
-                b.selected_plan as subscription
+                p.created_at, p.updated_at, p.base_documents, p.used_documents,
+                b.selected_plan as subscription, b.document_credits, b.document_purchase_history
             FROM projects p
             LEFT JOIN billing b ON p.user_id = b.user_id
             WHERE p.id = ${projectId} AND p.user_id = ${userId}
@@ -348,12 +347,12 @@ const getProjectById = async (req, res) => {
             aiPrompt: project.ai_prompt,
             createdAt: project.created_at,
             updatedAt: project.updated_at,
-            // Document tracking
+            // Document tracking - NEW SCHEMA
             baseDocuments: project.base_documents,
-            purchasedDocuments: project.purchased_documents,
-            totalDocuments: project.total_documents,
-            usedDocuments: 0, // TODO: Implement when documents are actually generated
-            documentPurchases: project.document_purchases || [],
+            usedDocuments: project.used_documents,
+            // Document credits are now account-wide in billing table
+            documentCredits: project.document_credits || 0,
+            documentPurchaseHistory: project.document_purchase_history || [],
             subscription: project.subscription || 'free'
         };
 
@@ -490,7 +489,7 @@ const updateProject = async (req, res) => {
     }
 };
 
-// Purchase Documents for Project
+// Purchase Document Credits (Account-wide)
 // Route POST: /api/projects/:projectId/purchase-documents
 // http://localhost:3000/api/projects/:projectId/purchase-documents
 const purchaseProjectDocuments = async (req, res) => {
@@ -499,7 +498,7 @@ const purchaseProjectDocuments = async (req, res) => {
         const { projectId } = req.params;
         const { quantity = 5 } = req.body;
         
-        console.log('Purchase documents request:', { userId, projectId, quantity });
+        console.log('Purchase document credits request:', { userId, projectId, quantity });
 
         // Input validation
         if (!projectId) {
@@ -524,27 +523,34 @@ const purchaseProjectDocuments = async (req, res) => {
             });
         }
 
-        // Check if project exists and belongs to user
-        const projectResult = await sql`
+        // Check if project exists and get user's billing info
+        const result = await sql`
             SELECT 
-                p.id, p.project_name, p.purchased_documents, p.document_purchases,
-                b.selected_plan
+                p.id, p.project_name,
+                b.id as billing_id, b.selected_plan, b.document_credits, b.total_document_purchases, b.document_purchase_history
             FROM projects p
             LEFT JOIN billing b ON p.user_id = b.user_id
             WHERE p.id = ${projectId} AND p.user_id = ${userId}
         `;
 
-        if (projectResult.length === 0) {
+        if (result.length === 0) {
             return res.status(404).json({
                 success: false,
                 message: 'Project not found or you do not have access to this project'
             });
         }
 
-        const project = projectResult[0];
+        const { project_name, billing_id, selected_plan, document_credits, total_document_purchases, document_purchase_history } = result[0];
+
+        if (!billing_id) {
+            return res.status(400).json({
+                success: false,
+                message: 'No billing record found. Please complete onboarding first.'
+            });
+        }
 
         // Check if user is on Enterprise plan (unlimited documents)
-        if (project.selected_plan === 'enterprise') {
+        if (selected_plan === 'enterprise') {
             return res.status(400).json({
                 success: false,
                 message: 'Enterprise plan includes unlimited documents'
@@ -552,8 +558,9 @@ const purchaseProjectDocuments = async (req, res) => {
         }
 
         // Calculate new values
-        const currentPurchased = project.purchased_documents || 0;
-        const newPurchased = currentPurchased + quantity;
+        const currentCredits = document_credits || 0;
+        const newCredits = currentCredits + quantity;
+        const newTotalPurchases = (total_document_purchases || 0) + 1;
 
         // Create purchase record
         const purchaseRecord = {
@@ -561,50 +568,53 @@ const purchaseProjectDocuments = async (req, res) => {
             quantity: quantity,
             price: 8.00,
             purchase_date: new Date().toISOString(),
-            package_type: 'document_pack'
+            package_type: 'document_pack',
+            project_id: projectId,
+            project_name: project_name
         };
 
         // Parse existing purchase history and add new record
-        const currentHistory = project.document_purchases || [];
+        const currentHistory = document_purchase_history || [];
         const updatedHistory = [...currentHistory, purchaseRecord];
 
-        // Update project record
+        // Update billing record with new document credits
         const updateResult = await sql`
-            UPDATE projects 
+            UPDATE billing 
             SET 
-                purchased_documents = ${newPurchased},
-                document_purchases = ${JSON.stringify(updatedHistory)}::jsonb,
+                document_credits = ${newCredits},
+                total_document_purchases = ${newTotalPurchases},
+                document_purchase_history = ${JSON.stringify(updatedHistory)}::jsonb,
                 last_document_purchase = NOW(),
                 updated_at = NOW()
-            WHERE id = ${projectId} AND user_id = ${userId}
-            RETURNING id, project_name, purchased_documents, total_documents, updated_at
+            WHERE user_id = ${userId}
+            RETURNING id, document_credits, total_document_purchases, updated_at
         `;
 
         if (updateResult.length === 0) {
             return res.status(500).json({
                 success: false,
-                message: 'Failed to update project'
+                message: 'Failed to update billing record'
             });
         }
 
-        const updatedProject = updateResult[0];
+        const updatedBilling = updateResult[0];
 
         // Return success response
         res.status(200).json({
             success: true,
-            message: `Successfully purchased ${quantity} additional documents for "${updatedProject.project_name}"`,
+            message: `Successfully purchased ${quantity} document credits for your account!`,
             purchase: {
                 quantity: quantity,
                 price: 8.00,
-                new_purchased_documents: updatedProject.purchased_documents,
-                new_total_documents: updatedProject.total_documents,
+                new_document_credits: updatedBilling.document_credits,
+                total_purchases: updatedBilling.total_document_purchases,
                 purchase_id: purchaseRecord.id,
-                project_name: updatedProject.project_name
+                project_name: project_name
             }
         });
 
     } catch (error) {
-        console.error('Purchase project documents error:', error);
+        console.error('Purchase document credits error:', error);
 
         // Handle specific database errors
         if (error.code === '23514') { 
